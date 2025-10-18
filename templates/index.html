@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KedarMusic - JioSaavn Downloader</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>KedarMusic</h1>
+        <p>Paste a JioSaavn link (song/album/playlist) and get the highest quality URL with metadata.</p>
+        <form id="linkForm">
+            <label for="linkInput">JioSaavn link</label>
+            <input id="linkInput" type="url" placeholder="https://www.jiosaavn.com/song/..." required>
+            <label for="lyricsToggle" class="checkbox">
+                <input id="lyricsToggle" type="checkbox" checked> Include lyrics
+            </label>
+            <button type="submit">Fetch</button>
+        </form>
+        <div id="error" class="error" hidden></div>
+        <div id="result" class="result" hidden></div>
+    </div>
+
+    <script>
+        const form = document.getElementById('linkForm');
+        const input = document.getElementById('linkInput');
+        const lyricsToggle = document.getElementById('lyricsToggle');
+        const result = document.getElementById('result');
+        const errorBox = document.getElementById('error');
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorBox.hidden = true;
+            result.hidden = true;
+            result.innerHTML = '';
+
+            const link = input.value.trim();
+            if (!link) return;
+
+            try {
+                const url = new URL(window.location.origin + '/result/');
+                url.searchParams.set('query', link);
+                if (lyricsToggle.checked) url.searchParams.set('lyrics', 'true');
+                const resp = await fetch(url.toString());
+                const data = await resp.json();
+                if (!resp.ok || (data && data.status === false)) {
+                    throw new Error((data && data.error) || 'Failed to fetch');
+                }
+                renderResult(data);
+            } catch (err) {
+                errorBox.textContent = err.message || String(err);
+                errorBox.hidden = false;
+            }
+        });
+
+        function renderResult(data) {
+            result.hidden = false;
+            if (Array.isArray(data)) {
+                // List of songs (e.g., album/playlist search result)
+                data.forEach(renderSongCard);
+            } else if (data && data.songs && Array.isArray(data.songs)) {
+                // Album/playlist object with songs
+                const header = document.createElement('div');
+                header.className = 'collection';
+                header.innerHTML = `
+                    <div class="meta">
+                        ${data.image ? `<img src="${data.image}" alt="cover"/>` : ''}
+                        <div>
+                            <div class="title">${escapeHtml(data.title || data.name || data.listname || 'Result')}</div>
+                            <div class="subtitle">${escapeHtml(data.primary_artists || '')}</div>
+                        </div>
+                    </div>
+                `;
+                result.appendChild(header);
+                data.songs.forEach(renderSongCard);
+            } else if (data && data.media_url) {
+                renderSongCard(data);
+            } else {
+                result.innerHTML = '<div class="muted">No result</div>';
+            }
+        }
+
+        function renderSongCard(song) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.innerHTML = `
+                <div class="cover">${song.image ? `<img src="${song.image}" alt="art"/>` : ''}</div>
+                <div class="info">
+                    <div class="title">${escapeHtml(song.song || song.title || 'Unknown')}</div>
+                    <div class="subtitle">${escapeHtml(song.primary_artists || song.singers || '')}</div>
+                    <div class="meta-line">${escapeHtml(song.album || '')}</div>
+                    <a class="btn" href="/download?query=${encodeURIComponent(song.id || '')}&format=mp3" target="_blank" rel="noopener">Download</a>
+                    <a class="btn secondary" href="/subtitles.srt?query=${encodeURIComponent(song.id || '')}" target="_blank" rel="noopener">Download SRT</a>
+                </div>
+            `;
+            result.appendChild(card);
+        }
+
+        // Modal helpers
+        function ensureModal(){
+            let modal = document.getElementById('lyricsModal');
+            if (modal) return modal;
+            modal = document.createElement('div');
+            modal.id = 'lyricsModal';
+            modal.className = 'modal';
+            modal.innerHTML = `
+                <div class="backdrop"></div>
+                <div class="dialog">
+                    <header>
+                        <div class="title" id="lyricsTitle">Lyrics</div>
+                        <button class="icon close" id="lyricsClose">✕</button>
+                    </header>
+                    <div class="content"><pre id="lyricsContent"></pre></div>
+                    <div class="actions">
+                        <button class="btn outline" id="lyricsCopy">Copy</button>
+                        <button class="btn" id="lyricsOk">Close</button>
+                    </div>
+                </div>`;
+            document.body.appendChild(modal);
+            const close = ()=> modal.classList.remove('open');
+            modal.querySelector('#lyricsClose').addEventListener('click', close);
+            modal.querySelector('.backdrop').addEventListener('click', close);
+            modal.querySelector('#lyricsOk').addEventListener('click', close);
+            modal.querySelector('#lyricsCopy').addEventListener('click', async ()=>{
+                try{ await navigator.clipboard.writeText(document.getElementById('lyricsContent').textContent || ''); }catch(e){}
+            });
+            return modal;
+        }
+
+        function openLyricsModal(title, text){
+            const modal = ensureModal();
+            document.getElementById('lyricsTitle').textContent = title;
+            document.getElementById('lyricsContent').textContent = text;
+            modal.classList.add('open');
+        }
+
+        function escapeHtml(unsafe) {
+            if (unsafe == null) return '';
+            return String(unsafe)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+    </script>
+</body>
+</html>
+
+
+
