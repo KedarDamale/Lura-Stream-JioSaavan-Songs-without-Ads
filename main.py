@@ -1,4 +1,4 @@
-"""KedarMusic: a FastAPI-powered JioSaavn discovery and playback service.
+"""Lura: a FastAPI-powered JioSaavn discovery and playback service.
 
 The browser and mobile apps stream through the ``/stream`` route. Audio is
 relayed in small chunks and is never persisted by the server during playback.
@@ -36,7 +36,7 @@ from pydub.utils import which
 
 import jiosaavn_client as jiosaavn
 
-logger = logging.getLogger("kedarmusic")
+logger = logging.getLogger("lura")
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_CORS_ORIGINS = "http://localhost:5100,http://127.0.0.1:5100"
 ALLOWED_ORIGINS = [
@@ -46,7 +46,7 @@ ALLOWED_ORIGINS = [
 ]
 
 app = FastAPI(
-    title="KedarMusic",
+    title="Lura",
     description="Search, stream, and download JioSaavn music.",
     version="2.0.0",
     docs_url="/docs",
@@ -223,7 +223,7 @@ def home(request: Request) -> HTMLResponse:
 
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "kedarmusic"}
+    return {"status": "ok", "service": "lura"}
 
 
 @app.get("/song/", tags=["catalog"])
@@ -327,7 +327,7 @@ def stream(
     song = jiosaavn.get_song(_song_id_from_query(query.strip()), include_lyrics=False)
     if not song or not song.get("media_url"):
         raise HTTPException(status_code=404, detail="Stream is not available for this song")
-    headers = {"User-Agent": "KedarMusic/2.0"}
+    headers = {"User-Agent": "Lura/2.0"}
     if range_header := request.headers.get("range"):
         headers["Range"] = range_header
     try:
