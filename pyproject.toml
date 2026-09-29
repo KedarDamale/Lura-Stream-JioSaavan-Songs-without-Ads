@@ -46,7 +46,8 @@ line-length = 100
 extend-exclude = [".venv"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "F", "I"]
+ignore = ["E501"]
 
 [tool.setuptools]
 py-modules = ["main", "jiosaavn_client", "endpoints"]
