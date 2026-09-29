@@ -1,0 +1,43 @@
+name: Lura CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  api-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install API and quality dependencies
+        run: pip install -e ".[dev]"
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest --cov --cov-report=term-missing
+      - name: Build production container
+        run: docker build --tag lura-api:${{ github.sha }} .
+
+  android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Android APK inside Docker
+        run: >-
+          docker build --target artifact --output type=local,dest=release
+          --build-arg LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://example.com' }}
+          --file mobile/Dockerfile mobile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lura-android-apk
+          path: release/lura.apk
+          if-no-files-found: error
