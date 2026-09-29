@@ -1,363 +1,455 @@
-from typing import Any, Dict, Optional
+"""KedarMusic: a FastAPI-powered JioSaavn discovery and playback service.
 
-from fastapi import FastAPI, HTTPException, Query, Request, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, HTMLResponse, FileResponse, PlainTextResponse
-from fastapi.templating import Jinja2Templates
-from fastapi.staticfiles import StaticFiles
+The browser and mobile apps stream through the ``/stream`` route. Audio is
+relayed in small chunks and is never persisted by the server during playback.
+"""
 
-import jiosaavn_client as jiosaavn
+from __future__ import annotations
+
+import logging
 import os
-import io
-import tempfile
 import re
+import shutil
+import tempfile
+from contextlib import suppress
+from pathlib import Path
+from typing import Iterator, Literal
+from urllib.parse import urlparse
+
 import requests
-from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, USLT, TDRC, SYLT
-from mutagen import File as MutagenFile
-from mutagen.id3 import ID3NoHeaderError
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from mutagen.id3 import APIC, TALB, TIT2, TDRC, TPE1, USLT, ID3, ID3NoHeaderError
+from mutagen.mp4 import MP4, MP4Cover, MP4FreeForm
 from pydub import AudioSegment
 from pydub.utils import which
-import shutil
 
+import jiosaavn_client as jiosaavn
 
-app = FastAPI(title="KedarMusic JioSaavn API", version="1.0.0")
+logger = logging.getLogger("kedarmusic")
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_CORS_ORIGINS = "http://localhost:5100,http://127.0.0.1:5100"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", DEFAULT_CORS_ORIGINS).split(",")
+    if origin.strip()
+]
 
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
+app = FastAPI(
+    title="KedarMusic",
+    description="Search, stream, and download JioSaavn music.",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url=None,
+)
+app.add_middleware(GZipMiddleware, minimum_size=800)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
+    allow_methods=["GET"],
+    allow_headers=["Accept", "Content-Type", "Range"],
+    expose_headers=["Accept-Ranges", "Content-Length", "Content-Range"],
 )
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
-@app.get("/")
-def home() -> RedirectResponse:
-    # Redirect to UI template
-    return RedirectResponse(url="/ui")
-
-
-@app.get("/ui", response_class=HTMLResponse)
-def ui(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-
-@app.get("/song/")
-def search(
-    query: Optional[str] = Query(None, description="Search text or JioSaavn song URL"),
-    lyrics: bool = Query(False, description="Include lyrics in response"),
-    songdata: bool = Query(True, description="If true, fetch full song objects; else, return raw search results"),
-) -> JSONResponse:
-    if not query:
-        return JSONResponse(
-            {"status": False, "error": "Query is required to search songs!"}, status_code=400
-        )
-    data = jiosaavn.search_for_song(query, lyrics, songdata)
-    return JSONResponse(content=data)
-
-
-@app.get("/song/get/")
-def get_song(id: Optional[str] = Query(None), lyrics: bool = Query(False)) -> JSONResponse:
-    if not id:
-        return JSONResponse(
-            {"status": False, "error": "Song ID is required to get a song!"}, status_code=400
-        )
-    resp = jiosaavn.get_song(id, lyrics)
-    if not resp:
-        return JSONResponse({"status": False, "error": "Invalid Song ID received!"}, status_code=404)
-    return JSONResponse(content=resp)
-
-
-@app.get("/playlist/")
-def playlist(query: Optional[str] = Query(None), lyrics: bool = Query(False)) -> JSONResponse:
-    if not query:
-        return JSONResponse(
-            {"status": False, "error": "Query is required to search playlists!"}, status_code=400
-        )
-    list_id = jiosaavn.get_playlist_id(query)
-    songs = jiosaavn.get_playlist(list_id, lyrics)
-    return JSONResponse(content=songs)
-
-
-@app.get("/album/")
-def album(query: Optional[str] = Query(None), lyrics: bool = Query(False)) -> JSONResponse:
-    if not query:
-        return JSONResponse(
-            {"status": False, "error": "Query is required to search albums!"}, status_code=400
-        )
-    album_id = jiosaavn.get_album_id(query)
-    songs = jiosaavn.get_album(album_id, lyrics)
-    return JSONResponse(content=songs)
-
-
-@app.get("/lyrics/")
-def lyrics_endpoint(query: Optional[str] = Query(None)) -> JSONResponse:
-    if not query:
-        return JSONResponse(
-            {
-                "status": False,
-                "error": "Query containing song link or id is required to fetch lyrics!",
-            },
-            status_code=400,
-        )
-    try:
-        if ("http" in query) and ("saavn" in query or "jiosaavn" in query):
-            song_id = jiosaavn.get_song_id(query)
-            lyrics_text = jiosaavn.get_lyrics(song_id)
-        else:
-            lyrics_text = jiosaavn.get_lyrics(query)
-        return JSONResponse({"status": True, "lyrics": lyrics_text})
-    except Exception as e:
-        return JSONResponse({"status": False, "error": str(e)}, status_code=500)
-
-
-@app.get("/result/")
-def result(query: Optional[str] = Query(None), lyrics: bool = Query(False)) -> JSONResponse:
-    if not query:
-        return JSONResponse(
-            {"status": False, "error": "Query is required!"}, status_code=400
-        )
-
-    if "saavn" not in query and "jiosaavn" not in query:
-        data = jiosaavn.search_for_song(query, lyrics, True)
-        return JSONResponse(content=data)
-
-    try:
-        if "/song/" in query:
-            song_id = jiosaavn.get_song_id(query)
-            song = jiosaavn.get_song(song_id, lyrics)
-            return JSONResponse(content=song)
-        elif "/album/" in query:
-            album_id = jiosaavn.get_album_id(query)
-            songs = jiosaavn.get_album(album_id, lyrics)
-            return JSONResponse(content=songs)
-        elif "/playlist/" in query or "/featured/" in query:
-            list_id = jiosaavn.get_playlist_id(query)
-            songs = jiosaavn.get_playlist(list_id, lyrics)
-            return JSONResponse(content=songs)
-    except Exception as e:
-        return JSONResponse({"status": False, "error": str(e)}, status_code=500)
-
-    return JSONResponse({"status": False, "error": "Invalid query"}, status_code=400)
+def _error(message: str, status_code: int) -> JSONResponse:
+    """Return the error envelope retained for compatibility with the old API."""
+    return JSONResponse({"status": False, "error": message}, status_code=status_code)
 
 
 def _sanitize_filename(name: str) -> str:
-    name = re.sub(r"[\\/:*?\"<>|]", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-    return name or "song"
+    clean_name = re.sub(r"[\\\\/:*?\"<>|]", " ", name)
+    clean_name = re.sub(r"\s+", " ", clean_name).strip(" .")
+    return clean_name[:180] or "song"
 
 
-@app.get("/download")
-def download(
-    background_tasks: BackgroundTasks,
-    query: Optional[str] = Query(None, description="JioSaavn song link or id"),
-    format: str = Query("auto", regex="^(auto|mp3|m4a)$", description="Output format"),
-) -> FileResponse:
-    if not query:
-        raise HTTPException(status_code=400, detail="Query (song link or id) is required")
-
-    # Resolve song id
-    if ("http" in query) and ("saavn" in query or "jiosaavn" in query):
-        song_id = jiosaavn.get_song_id(query)
-    else:
-        song_id = query
-
-    song = jiosaavn.get_song(song_id, include_lyrics=True)
-    if not song:
-        raise HTTPException(status_code=404, detail="Song not found")
-
-    # Download source audio
-    media_url = song.get("media_url")
-    if not media_url:
-        raise HTTPException(status_code=500, detail="Media URL missing")
-
-    src_ext = ".mp4" if ".mp4" in media_url else (".m4a" if media_url.endswith(".m4a") else ".bin")
-    src_fd, src_path = tempfile.mkstemp(suffix=src_ext)
-    os.close(src_fd)
-    with requests.get(media_url, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        with open(src_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=1024 * 64):
-                if chunk:
-                    f.write(chunk)
-
-    title = song.get("song") or song.get("title") or "Song"
-    artists_text = song.get("primary_artists") or song.get("singers") or ""
-    artists = [a.strip() for a in artists_text.split(",") if a.strip()] or [artists_text]
-    album = song.get("album") or ""
-    year = song.get("year") or ""
-    lyrics_text = song.get("lyrics") or ""
-
-    cover_bytes = None
-    image_url = song.get("image")
-    if image_url:
-        try:
-            img_resp = requests.get(image_url, timeout=30)
-            if img_resp.ok:
-                cover_bytes = img_resp.content
-        except Exception:
-            cover_bytes = None
-
-    filename_base = _sanitize_filename(f"{title} - {artists_text}" if artists_text else title)
-
-    # Choose output format
-    chosen_format = format
-    if format == "auto":
-        chosen_format = "mp3" if (which("ffmpeg") and which("ffprobe")) else "m4a"
-    # Graceful fallback: if MP3 requested but ffmpeg not available, switch to m4a silently
-    if chosen_format == "mp3" and not (which("ffmpeg") and which("ffprobe")):
-        chosen_format = "m4a"
-
-    # Prepare output
-    out_suffix = ".mp3" if chosen_format == "mp3" else ".m4a"
-    out_fd, out_path = tempfile.mkstemp(suffix=out_suffix)
-    os.close(out_fd)
-
-    try:
-        if chosen_format == "mp3":
-            # Transcode to MP3 using ffmpeg (required by pydub)
-            audio = AudioSegment.from_file(src_path)
-            audio.export(out_path, format="mp3", bitrate="320k")
-
-            # Embed ID3v2.3 tags for Windows Media Player compatibility
-            try:
-                id3 = ID3(out_path)
-            except ID3NoHeaderError:
-                id3 = ID3()
-
-            # Use UTF-16 (encoding=1) for broader Windows Media Player compatibility
-            id3.add(TIT2(encoding=1, text=title))
-            if artists:
-                id3.add(TPE1(encoding=1, text=artists))
-            if album:
-                id3.add(TALB(encoding=1, text=album))
-            if year:
-                id3.add(TDRC(encoding=1, text=str(year)))
-            if cover_bytes:
-                mime = "image/jpeg" if image_url and image_url.lower().endswith(".jpg") or image_url.lower().endswith(".jpeg") else "image/png"
-                id3.add(APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_bytes))
-            if lyrics_text:
-                # Unsynchronized lyrics (USLT) with UTF-16
-                id3.add(USLT(encoding=1, lang="eng", desc="", text=lyrics_text))
-                # Basic SYLT placeholder: order must be (timestamp_ms, text)
-                try:
-                    lines = [ln for ln in lyrics_text.splitlines() if ln.strip()]
-                    step = 2000  # 2s per line placeholder
-                    events = [((i * step), ln) for i, ln in enumerate(lines)]
-                    id3.add(SYLT(encoding=1, lang="eng", format=2, type=1, desc="Lyrics", text=events))
-                except Exception:
-                    pass
-
-            id3.save(out_path, v2_version=3)
-
-        else:  # m4a
-            # Avoid ffmpeg: copy original file to output and tag directly
-            shutil.copyfile(src_path, out_path)
-            from mutagen.mp4 import MP4, MP4Cover
-            from mutagen.mp4 import MP4FreeForm
-
-            mp4 = MP4(out_path)
-            mp4["\xa9nam"] = title
-            if artists_text:
-                mp4["\xa9ART"] = artists_text
-            if album:
-                mp4["\xa9alb"] = album
-            if year:
-                mp4["\xa9day"] = str(year)
-            if lyrics_text:
-                # Standard lyrics atom
-                mp4["\xa9lyr"] = lyrics_text
-                # Freeform iTunes lyrics (improves compatibility across players)
-                try:
-                    mp4["----:com.apple.iTunes:Lyrics"] = [MP4FreeForm(lyrics_text.encode("utf-8"), MP4FreeForm.UTF8)]
-                except Exception:
-                    pass
-            if cover_bytes:
-                image_format = MP4Cover.FORMAT_JPEG if (image_url and (image_url.lower().endswith(".jpg") or image_url.lower().endswith(".jpeg"))) else MP4Cover.FORMAT_PNG
-                mp4["covr"] = [MP4Cover(cover_bytes, imageformat=image_format)]
-            mp4.save()
-
-    except Exception as e:
-        # Cleanup on failure
-        try:
-            os.remove(out_path)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
-    finally:
-        try:
-            os.remove(src_path)
-        except Exception:
-            pass
-
-    background_tasks.add_task(lambda p: os.remove(p), out_path)
-    media_type = "audio/mpeg" if chosen_format == "mp3" else "audio/mp4"
-    return FileResponse(
-        path=out_path,
-        media_type=media_type,
-        filename=f"{filename_base}{out_suffix}",
-        background=background_tasks,
+def _is_jiosaavn_url(value: str) -> bool:
+    parsed = urlparse(value)
+    hostname = (parsed.hostname or "").lower()
+    return parsed.scheme in {"http", "https"} and (
+        hostname == "saavn.com"
+        or hostname.endswith(".saavn.com")
+        or hostname == "jiosaavn.com"
+        or hostname.endswith(".jiosaavn.com")
     )
 
 
-def _to_srt_timestamp(ms: int) -> str:
-    hours = ms // 3600000
-    minutes = (ms % 3600000) // 60000
-    seconds = (ms % 60000) // 1000
-    millis = ms % 1000
+def _song_id_from_query(query: str) -> str:
+    """Resolve a JioSaavn URL or accept a provider-specific song ID."""
+    if query.startswith(("http://", "https://")):
+        if not _is_jiosaavn_url(query):
+            raise HTTPException(status_code=400, detail="Only JioSaavn URLs are supported")
+        return jiosaavn.get_song_id(query)
+    return query
+
+
+def _to_srt_timestamp(milliseconds: int) -> str:
+    hours = milliseconds // 3_600_000
+    minutes = (milliseconds % 3_600_000) // 60_000
+    seconds = (milliseconds % 60_000) // 1_000
+    millis = milliseconds % 1_000
     return f"{hours:02d}:{minutes:02d}:{seconds:02d},{millis:03d}"
 
 
 def _lyrics_to_srt(lyrics_text: str) -> str:
-    lines = [ln.strip() for ln in lyrics_text.splitlines() if ln.strip()]
-    if not lines:
-        return ""
-    step = 2000  # 2 seconds per line
+    """Create readable, evenly timed subtitles when synced lyrics are absent."""
+    lines = [line.strip() for line in lyrics_text.splitlines() if line.strip()]
     blocks = []
-    for idx, line in enumerate(lines, start=1):
-        start = (idx - 1) * step
-        end = start + step
-        blocks.append(f"{idx}\n{_to_srt_timestamp(start)} --> { _to_srt_timestamp(end)}\n{line}\n")
+    for index, line in enumerate(lines, start=1):
+        start = (index - 1) * 2_000
+        blocks.append(
+            f"{index}\n{_to_srt_timestamp(start)} --> {_to_srt_timestamp(start + 2_000)}\n{line}\n"
+        )
     return "\n".join(blocks)
 
 
-@app.get("/subtitles.srt")
-def subtitles(query: Optional[str] = Query(None)) -> PlainTextResponse:
-    if not query:
-        raise HTTPException(status_code=400, detail="Query (song link or id) is required")
+def _download_file(url: str, destination: str) -> None:
+    with requests.get(url, stream=True, timeout=(10, 90)) as response:
+        response.raise_for_status()
+        with open(destination, "wb") as audio_file:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    audio_file.write(chunk)
 
-    # Resolve song id
-    if ("http" in query) and ("saavn" in query or "jiosaavn" in query):
-        song_id = jiosaavn.get_song_id(query)
-    else:
-        song_id = query
 
-    song = jiosaavn.get_song(song_id, include_lyrics=True)
+def _image_bytes(image_url: str | None) -> bytes | None:
+    if not image_url:
+        return None
+    try:
+        response = requests.get(image_url, timeout=(5, 20))
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException:
+        logger.info("Artwork download failed", exc_info=True)
+        return None
+
+
+def _image_is_jpeg(image_url: str | None) -> bool:
+    return bool(image_url and image_url.lower().split("?", maxsplit=1)[0].endswith((".jpg", ".jpeg")))
+
+
+def _add_mp3_metadata(
+    output_path: str,
+    *,
+    title: str,
+    artists: list[str],
+    album: str,
+    year: str,
+    lyrics: str,
+    artwork: bytes | None,
+    artwork_url: str | None,
+) -> None:
+    try:
+        tags = ID3(output_path)
+    except ID3NoHeaderError:
+        tags = ID3()
+    tags.add(TIT2(encoding=3, text=title))
+    if artists:
+        tags.add(TPE1(encoding=3, text=artists))
+    if album:
+        tags.add(TALB(encoding=3, text=album))
+    if year:
+        tags.add(TDRC(encoding=3, text=year))
+    if lyrics:
+        tags.add(USLT(encoding=3, lang="eng", desc="", text=lyrics))
+    if artwork:
+        tags.add(
+            APIC(
+                encoding=3,
+                mime="image/jpeg" if _image_is_jpeg(artwork_url) else "image/png",
+                type=3,
+                desc="Cover",
+                data=artwork,
+            )
+        )
+    tags.save(output_path, v2_version=3)
+
+
+def _add_m4a_metadata(
+    output_path: str,
+    *,
+    title: str,
+    artists: str,
+    album: str,
+    year: str,
+    lyrics: str,
+    artwork: bytes | None,
+    artwork_url: str | None,
+) -> None:
+    tags = MP4(output_path)
+    tags["\xa9nam"] = title
+    if artists:
+        tags["\xa9ART"] = artists
+    if album:
+        tags["\xa9alb"] = album
+    if year:
+        tags["\xa9day"] = year
+    if lyrics:
+        tags["\xa9lyr"] = lyrics
+        tags["----:com.apple.iTunes:Lyrics"] = [
+            MP4FreeForm(lyrics.encode("utf-8"), MP4FreeForm.UTF8)
+        ]
+    if artwork:
+        artwork_format = MP4Cover.FORMAT_JPEG if _image_is_jpeg(artwork_url) else MP4Cover.FORMAT_PNG
+        tags["covr"] = [MP4Cover(artwork, imageformat=artwork_format)]
+    tags.save()
+
+
+def _stream_chunks(response: requests.Response) -> Iterator[bytes]:
+    """Yield upstream audio without writing it to persistent storage."""
+    try:
+        yield from response.iter_content(chunk_size=64 * 1024)
+    finally:
+        response.close()
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def home(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "index.html", {"app_name": "KedarMusic"})
+
+
+@app.get("/health", tags=["system"])
+def health() -> dict[str, str]:
+    return {"status": "ok", "service": "kedarmusic"}
+
+
+@app.get("/song/", tags=["catalog"])
+def search(
+    query: str | None = Query(default=None, description="Search text or JioSaavn song URL"),
+    lyrics: bool = Query(default=False, description="Include lyrics in the response"),
+    songdata: bool = Query(default=True, description="Fetch full song objects"),
+) -> JSONResponse:
+    if not query or not query.strip():
+        return _error("Query is required to search songs", 400)
+    try:
+        return JSONResponse(content=jiosaavn.search_for_song(query.strip(), lyrics, songdata))
+    except requests.RequestException:
+        logger.warning("Song search failed", exc_info=True)
+        return _error("Music provider is currently unavailable", 502)
+
+
+@app.get("/song/get/", tags=["catalog"])
+def get_song(song_id: str | None = Query(default=None), lyrics: bool = Query(default=False)) -> JSONResponse:
+    if not song_id or not song_id.strip():
+        return _error("Song ID is required", 400)
+    song = jiosaavn.get_song(song_id.strip(), lyrics)
+    if not song:
+        return _error("Song not found", 404)
+    return JSONResponse(content=song)
+
+
+@app.get("/playlist/", tags=["catalog"])
+def playlist(query: str | None = Query(default=None), lyrics: bool = Query(default=False)) -> JSONResponse:
+    if not query or not query.strip():
+        return _error("Query is required to fetch a playlist", 400)
+    if not _is_jiosaavn_url(query):
+        return _error("A JioSaavn playlist URL is required", 400)
+    try:
+        data = jiosaavn.get_playlist(jiosaavn.get_playlist_id(query), lyrics)
+    except (IndexError, requests.RequestException):
+        logger.warning("Playlist lookup failed", exc_info=True)
+        return _error("Playlist could not be fetched", 502)
+    return JSONResponse(content=data)
+
+
+@app.get("/album/", tags=["catalog"])
+def album(query: str | None = Query(default=None), lyrics: bool = Query(default=False)) -> JSONResponse:
+    if not query or not query.strip():
+        return _error("Query is required to fetch an album", 400)
+    if not _is_jiosaavn_url(query):
+        return _error("A JioSaavn album URL is required", 400)
+    try:
+        data = jiosaavn.get_album(jiosaavn.get_album_id(query), lyrics)
+    except (IndexError, requests.RequestException):
+        logger.warning("Album lookup failed", exc_info=True)
+        return _error("Album could not be fetched", 502)
+    return JSONResponse(content=data)
+
+
+@app.get("/lyrics/", tags=["catalog"])
+def lyrics_endpoint(query: str | None = Query(default=None)) -> JSONResponse:
+    if not query or not query.strip():
+        return _error("A song ID or JioSaavn song URL is required", 400)
+    try:
+        lyrics = jiosaavn.get_lyrics(_song_id_from_query(query.strip()))
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Lyrics lookup failed", exc_info=True)
+        return _error(str(exc) or "Lyrics could not be fetched", 502)
+    return JSONResponse({"status": True, "lyrics": lyrics})
+
+
+@app.get("/result/", tags=["catalog"])
+def result(query: str | None = Query(default=None), lyrics: bool = Query(default=False)) -> JSONResponse:
+    """Resolve search text, song URLs, album URLs, and playlist URLs in one route."""
+    if not query or not query.strip():
+        return _error("Query is required", 400)
+    query = query.strip()
+    if not query.startswith(("http://", "https://")):
+        return JSONResponse(content=jiosaavn.search_for_song(query, lyrics, True))
+    if not _is_jiosaavn_url(query):
+        return _error("Only JioSaavn URLs are supported", 400)
+    try:
+        path = urlparse(query).path
+        if "/song/" in path:
+            song = jiosaavn.get_song(jiosaavn.get_song_id(query), lyrics)
+            return JSONResponse(content=song or {"status": False, "error": "Song not found"})
+        if "/album/" in path:
+            return JSONResponse(content=jiosaavn.get_album(jiosaavn.get_album_id(query), lyrics))
+        if "/playlist/" in path or "/featured/" in path:
+            return JSONResponse(content=jiosaavn.get_playlist(jiosaavn.get_playlist_id(query), lyrics))
+    except (IndexError, requests.RequestException, ValueError):
+        logger.warning("Result lookup failed", exc_info=True)
+        return _error("The JioSaavn link could not be resolved", 502)
+    return _error("This JioSaavn link type is not supported", 400)
+
+
+@app.get("/stream", tags=["streaming"])
+def stream(
+    request: Request,
+    query: str | None = Query(default=None, description="JioSaavn song link or song ID"),
+) -> StreamingResponse:
+    """Proxy a track as a memory-only streaming response, including seeking."""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="A song ID or JioSaavn song URL is required")
+    song = jiosaavn.get_song(_song_id_from_query(query.strip()), include_lyrics=False)
+    if not song or not song.get("media_url"):
+        raise HTTPException(status_code=404, detail="Stream is not available for this song")
+    headers = {"User-Agent": "KedarMusic/2.0"}
+    if range_header := request.headers.get("range"):
+        headers["Range"] = range_header
+    try:
+        upstream = requests.get(song["media_url"], headers=headers, stream=True, timeout=(10, 90))
+        upstream.raise_for_status()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="The audio provider is unavailable") from exc
+    response_headers = {"Accept-Ranges": "bytes", "Cache-Control": "no-store"}
+    for header in ("Content-Length", "Content-Range"):
+        if value := upstream.headers.get(header):
+            response_headers[header] = value
+    return StreamingResponse(
+        _stream_chunks(upstream),
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("Content-Type", "audio/mp4"),
+        headers=response_headers,
+    )
+
+
+@app.get("/download", tags=["downloads"])
+def download(
+    background_tasks: BackgroundTasks,
+    query: str | None = Query(default=None, description="JioSaavn song link or song ID"),
+    output_format: Literal["auto", "mp3", "m4a"] = Query(default="auto", alias="format"),
+) -> FileResponse:
+    """Prepare a tagged file for an explicit user download."""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="A song ID or JioSaavn song URL is required")
+    song = jiosaavn.get_song(_song_id_from_query(query.strip()), include_lyrics=True)
+    if not song or not song.get("media_url"):
+        raise HTTPException(status_code=404, detail="Song is not available for download")
+    source_fd, source_path = tempfile.mkstemp(suffix=".m4a")
+    os.close(source_fd)
+    destination_path: str | None = None
+    try:
+        _download_file(song["media_url"], source_path)
+        title = song.get("song") or song.get("title") or "Song"
+        artists_text = song.get("primary_artists") or song.get("singers") or ""
+        artists = [artist.strip() for artist in artists_text.split(",") if artist.strip()]
+        album_name = song.get("album") or ""
+        release_year = str(song.get("year") or "")
+        lyrics = song.get("lyrics") or ""
+        artwork_url = song.get("image")
+        artwork = _image_bytes(artwork_url)
+        chosen_format = output_format
+        if chosen_format == "auto":
+            chosen_format = "mp3" if which("ffmpeg") and which("ffprobe") else "m4a"
+        if chosen_format == "mp3" and not (which("ffmpeg") and which("ffprobe")):
+            raise HTTPException(status_code=503, detail="MP3 conversion requires ffmpeg and ffprobe")
+        destination_fd, destination_path = tempfile.mkstemp(suffix=f".{chosen_format}")
+        os.close(destination_fd)
+        if chosen_format == "mp3":
+            AudioSegment.from_file(source_path).export(destination_path, format="mp3", bitrate="320k")
+            _add_mp3_metadata(
+                destination_path,
+                title=title,
+                artists=artists,
+                album=album_name,
+                year=release_year,
+                lyrics=lyrics,
+                artwork=artwork,
+                artwork_url=artwork_url,
+            )
+            media_type = "audio/mpeg"
+        else:
+            shutil.copyfile(source_path, destination_path)
+            _add_m4a_metadata(
+                destination_path,
+                title=title,
+                artists=artists_text,
+                album=album_name,
+                year=release_year,
+                lyrics=lyrics,
+                artwork=artwork,
+                artwork_url=artwork_url,
+            )
+            media_type = "audio/mp4"
+    except HTTPException:
+        if destination_path:
+            with suppress(OSError):
+                os.remove(destination_path)
+        raise
+    except (OSError, requests.RequestException, ValueError) as exc:
+        if destination_path:
+            with suppress(OSError):
+                os.remove(destination_path)
+        logger.exception("Download processing failed")
+        raise HTTPException(status_code=502, detail="Unable to prepare this download") from exc
+    finally:
+        with suppress(OSError):
+            os.remove(source_path)
+    filename = _sanitize_filename(f"{title} - {artists_text}" if artists_text else title)
+    background_tasks.add_task(os.remove, destination_path)
+    return FileResponse(
+        path=destination_path,
+        media_type=media_type,
+        filename=f"{filename}.{chosen_format}",
+        background=background_tasks,
+    )
+
+
+@app.get("/subtitles.srt", tags=["downloads"])
+def subtitles(query: str | None = Query(default=None)) -> PlainTextResponse:
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="A song ID or JioSaavn song URL is required")
+    song = jiosaavn.get_song(_song_id_from_query(query.strip()), include_lyrics=True)
     if not song:
         raise HTTPException(status_code=404, detail="Song not found")
-
-    lyrics_text = (song.get("lyrics") or "").strip()
-    if not lyrics_text:
-        raise HTTPException(status_code=404, detail="Lyrics not available for this song")
-
-    srt = _lyrics_to_srt(lyrics_text)
-    if not srt:
-        raise HTTPException(status_code=404, detail="Unable to generate subtitles from lyrics")
-
+    subtitles_text = _lyrics_to_srt((song.get("lyrics") or "").strip())
+    if not subtitles_text:
+        raise HTTPException(status_code=404, detail="Lyrics are not available for this song")
     title = song.get("song") or song.get("title") or "lyrics"
-    artists_text = song.get("primary_artists") or song.get("singers") or ""
-    base = _sanitize_filename(f"{title} - {artists_text}" if artists_text else title)
-    filename = base + ".srt"
-    headers = {"Content-Disposition": f"attachment; filename=\"{filename}\""}
-    return PlainTextResponse(content=srt, media_type="application/x-subrip", headers=headers)
+    artists = song.get("primary_artists") or song.get("singers") or ""
+    filename = _sanitize_filename(f"{title} - {artists}" if artists else title)
+    return PlainTextResponse(
+        content=subtitles_text,
+        media_type="application/x-subrip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}.srt"'},
+    )
 
 
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="localhost", port=5100, reload=True)
-
-
+    uvicorn.run("main:app", host="0.0.0.0", port=5100, reload=True)
