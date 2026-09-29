@@ -1,152 +1,251 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>KedarMusic - JioSaavn Downloader</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <meta name="description" content="Search, stream, and download music with KedarMusic.">
+    <title>{{ app_name }} · Music without the clutter</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>KedarMusic</h1>
-        <p>Paste a JioSaavn link (song/album/playlist) and get the highest quality URL with metadata.</p>
-        <form id="linkForm">
-            <label for="linkInput">JioSaavn link</label>
-            <input id="linkInput" type="url" placeholder="https://www.jiosaavn.com/song/..." required>
-            <label for="lyricsToggle" class="checkbox">
-                <input id="lyricsToggle" type="checkbox" checked> Include lyrics
-            </label>
-            <button type="submit">Fetch</button>
-        </form>
-        <div id="error" class="error" hidden></div>
-        <div id="result" class="result" hidden></div>
+    <div class="app-shell">
+        <aside class="sidebar" aria-label="Main navigation">
+            <a class="brand" href="/" aria-label="KedarMusic home">
+                <span class="brand-mark">K</span><span>Kedar<span>Music</span></span>
+            </a>
+            <nav>
+                <a class="nav-item active" href="#discover"><span>⌂</span> Discover</a>
+                <a class="nav-item" href="#search"><span>⌕</span> Search</a>
+                <a class="nav-item" href="#library"><span>♡</span> Your library</a>
+            </nav>
+            <div class="sidebar-note">
+                <strong>Music, on demand.</strong>
+                <p>Stream straight to your player. Nothing is saved by the server while you listen.</p>
+            </div>
+            <button class="theme-toggle" id="themeToggle" type="button" aria-label="Switch color theme">
+                <span aria-hidden="true">☼</span> <span id="themeLabel">Light mode</span>
+            </button>
+        </aside>
+
+        <main id="discover">
+            <header class="topbar">
+                <button class="mobile-menu" id="menuToggle" type="button" aria-label="Open navigation">☰</button>
+                <form class="search-form" id="searchForm" role="search">
+                    <label class="sr-only" for="searchInput">Search for music</label>
+                    <span class="search-icon">⌕</span>
+                    <input id="searchInput" name="query" autocomplete="off" placeholder="What do you want to listen to?" required>
+                    <button type="submit">Search</button>
+                </form>
+                <a class="api-link" href="/docs" target="_blank" rel="noreferrer">API docs ↗</a>
+            </header>
+
+            <section class="hero" aria-labelledby="heroTitle">
+                <p class="eyebrow">YOUR SOUND, YOUR WAY</p>
+                <h1 id="heroTitle">Turn up your <em>everyday.</em></h1>
+                <p>Search songs, albums, playlists, or paste a JioSaavn link. Start streaming in a tap.</p>
+                <div class="hero-actions">
+                    <button class="primary-button" id="heroSearch" type="button">Find music <span>→</span></button>
+                    <button class="quiet-button" id="demoSearch" type="button">Try a search</button>
+                </div>
+                <div class="orb orb-one"></div><div class="orb orb-two"></div>
+            </section>
+
+            <section class="content-section" id="search" aria-live="polite">
+                <div class="section-heading">
+                    <div>
+                        <p class="eyebrow">DISCOVER</p>
+                        <h2 id="resultsTitle">Find your next favorite</h2>
+                    </div>
+                    <span class="result-count" id="resultCount"></span>
+                </div>
+                <div class="notice" id="notice" hidden role="alert"></div>
+                <div class="empty-state" id="emptyState">
+                    <div class="empty-icon">♫</div>
+                    <h3>Start with a song, artist, or link</h3>
+                    <p>Your results will appear here. You can play a song instantly or download it with tags.</p>
+                </div>
+                <div class="loading" id="loading" hidden><span></span> Searching the catalog…</div>
+                <div class="collection-card" id="collection" hidden></div>
+                <div class="track-grid" id="results"></div>
+            </section>
+        </main>
     </div>
 
+    <footer class="player" id="player" hidden>
+        <div class="now-playing">
+            <div class="player-cover" id="playerCover"><span>♫</span></div>
+            <div class="player-copy">
+                <strong id="playerTitle">Choose a track</strong>
+                <span id="playerArtist">Ready when you are</span>
+            </div>
+        </div>
+        <div class="player-controls">
+            <div class="control-row">
+                <button class="icon-button" id="previousTrack" type="button" title="Previous track" aria-label="Previous track">↶</button>
+                <button class="play-button" id="playButton" type="button" aria-label="Play">▶</button>
+                <button class="icon-button" id="nextTrack" type="button" title="Next track" aria-label="Next track">↷</button>
+            </div>
+            <div class="progress-row">
+                <time id="currentTime">0:00</time>
+                <input id="progress" type="range" min="0" max="100" value="0" aria-label="Playback position">
+                <time id="duration">0:00</time>
+            </div>
+        </div>
+        <div class="volume-control">
+            <span aria-hidden="true">⌁</span>
+            <label class="sr-only" for="volume">Volume</label>
+            <input id="volume" type="range" min="0" max="1" step="0.05" value="0.8">
+        </div>
+        <audio id="audio" preload="metadata"></audio>
+    </footer>
+
+    <dialog class="lyrics-dialog" id="lyricsDialog">
+        <div class="dialog-heading"><div><p class="eyebrow">LYRICS</p><h2 id="lyricsTitle">Now playing</h2></div><button class="icon-button" id="closeLyrics" type="button" aria-label="Close lyrics">×</button></div>
+        <pre id="lyricsBody">Loading lyrics…</pre>
+    </dialog>
+
+    <template id="trackTemplate">
+        <article class="track-card">
+            <button class="artwork" type="button" aria-label="Play track"><img alt=""><span class="artwork-play">▶</span></button>
+            <div class="track-details">
+                <h3></h3><p class="artist"></p><p class="album"></p>
+            </div>
+            <div class="track-actions">
+                <button class="small-button lyrics-button" type="button">Lyrics</button>
+                <a class="download-button" target="_blank" rel="noreferrer">Download <span>↓</span></a>
+            </div>
+        </article>
+    </template>
+
     <script>
-        const form = document.getElementById('linkForm');
-        const input = document.getElementById('linkInput');
-        const lyricsToggle = document.getElementById('lyricsToggle');
-        const result = document.getElementById('result');
-        const errorBox = document.getElementById('error');
+        const state = { tracks: [], index: -1 };
+        const $ = (selector) => document.querySelector(selector);
+        const audio = $('#audio');
+        const results = $('#results');
+        const searchInput = $('#searchInput');
 
-        form.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            errorBox.hidden = true;
-            result.hidden = true;
-            result.innerHTML = '';
+        const escapeHtml = (value = '') => String(value).replace(/[&<>'"]/g, (character) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[character]));
+        const trackTitle = (track) => track.song || track.title || 'Unknown track';
+        const trackArtist = (track) => track.primary_artists || track.singers || 'Unknown artist';
+        const formatTime = (seconds) => !Number.isFinite(seconds) ? '0:00' : `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 
-            const link = input.value.trim();
-            if (!link) return;
-
-            try {
-                const url = new URL(window.location.origin + '/result/');
-                url.searchParams.set('query', link);
-                if (lyricsToggle.checked) url.searchParams.set('lyrics', 'true');
-                const resp = await fetch(url.toString());
-                const data = await resp.json();
-                if (!resp.ok || (data && data.status === false)) {
-                    throw new Error((data && data.error) || 'Failed to fetch');
-                }
-                renderResult(data);
-            } catch (err) {
-                errorBox.textContent = err.message || String(err);
-                errorBox.hidden = false;
-            }
-        });
-
-        function renderResult(data) {
-            result.hidden = false;
-            if (Array.isArray(data)) {
-                // List of songs (e.g., album/playlist search result)
-                data.forEach(renderSongCard);
-            } else if (data && data.songs && Array.isArray(data.songs)) {
-                // Album/playlist object with songs
-                const header = document.createElement('div');
-                header.className = 'collection';
-                header.innerHTML = `
-                    <div class="meta">
-                        ${data.image ? `<img src="${data.image}" alt="cover"/>` : ''}
-                        <div>
-                            <div class="title">${escapeHtml(data.title || data.name || data.listname || 'Result')}</div>
-                            <div class="subtitle">${escapeHtml(data.primary_artists || '')}</div>
-                        </div>
-                    </div>
-                `;
-                result.appendChild(header);
-                data.songs.forEach(renderSongCard);
-            } else if (data && data.media_url) {
-                renderSongCard(data);
-            } else {
-                result.innerHTML = '<div class="muted">No result</div>';
-            }
+        function setNotice(message = '') {
+            const notice = $('#notice');
+            notice.textContent = message;
+            notice.hidden = !message;
         }
 
-        function renderSongCard(song) {
-            const card = document.createElement('div');
-            card.className = 'card';
-            card.innerHTML = `
-                <div class="cover">${song.image ? `<img src="${song.image}" alt="art"/>` : ''}</div>
-                <div class="info">
-                    <div class="title">${escapeHtml(song.song || song.title || 'Unknown')}</div>
-                    <div class="subtitle">${escapeHtml(song.primary_artists || song.singers || '')}</div>
-                    <div class="meta-line">${escapeHtml(song.album || '')}</div>
-                    <a class="btn" href="/download?query=${encodeURIComponent(song.id || '')}&format=mp3" target="_blank" rel="noopener">Download</a>
-                    <a class="btn secondary" href="/subtitles.srt?query=${encodeURIComponent(song.id || '')}" target="_blank" rel="noopener">Download SRT</a>
-                </div>
-            `;
-            result.appendChild(card);
+        function setLoading(isLoading) {
+            $('#loading').hidden = !isLoading;
+            $('#emptyState').hidden = isLoading || state.tracks.length > 0;
         }
 
-        // Modal helpers
-        function ensureModal(){
-            let modal = document.getElementById('lyricsModal');
-            if (modal) return modal;
-            modal = document.createElement('div');
-            modal.id = 'lyricsModal';
-            modal.className = 'modal';
-            modal.innerHTML = `
-                <div class="backdrop"></div>
-                <div class="dialog">
-                    <header>
-                        <div class="title" id="lyricsTitle">Lyrics</div>
-                        <button class="icon close" id="lyricsClose">✕</button>
-                    </header>
-                    <div class="content"><pre id="lyricsContent"></pre></div>
-                    <div class="actions">
-                        <button class="btn outline" id="lyricsCopy">Copy</button>
-                        <button class="btn" id="lyricsOk">Close</button>
-                    </div>
-                </div>`;
-            document.body.appendChild(modal);
-            const close = ()=> modal.classList.remove('open');
-            modal.querySelector('#lyricsClose').addEventListener('click', close);
-            modal.querySelector('.backdrop').addEventListener('click', close);
-            modal.querySelector('#lyricsOk').addEventListener('click', close);
-            modal.querySelector('#lyricsCopy').addEventListener('click', async ()=>{
-                try{ await navigator.clipboard.writeText(document.getElementById('lyricsContent').textContent || ''); }catch(e){}
+        function showCollection(data) {
+            const collection = $('#collection');
+            const name = data.title || data.name || data.listname;
+            if (!name) { collection.hidden = true; return; }
+            collection.innerHTML = `${data.image ? `<img src="${escapeHtml(data.image)}" alt="">` : '<div class="collection-art">♫</div>'}<div><p class="eyebrow">COLLECTION</p><h3>${escapeHtml(name)}</h3><p>${escapeHtml(data.primary_artists || data.firstname || `${(data.songs || []).length} tracks`)}</p></div>`;
+            collection.hidden = false;
+        }
+
+        function renderTracks(data) {
+            const tracks = Array.isArray(data) ? data : data?.songs || (data?.media_url ? [data] : []);
+            state.tracks = tracks.filter(Boolean);
+            state.index = -1;
+            results.innerHTML = '';
+            showCollection(Array.isArray(data) ? {} : data || {});
+            $('#emptyState').hidden = state.tracks.length > 0;
+            $('#resultCount').textContent = state.tracks.length ? `${state.tracks.length} track${state.tracks.length === 1 ? '' : 's'}` : '';
+            if (!state.tracks.length) { setNotice('No playable tracks were found. Try a more specific search.'); return; }
+            const template = $('#trackTemplate');
+            state.tracks.forEach((track, index) => {
+                const fragment = template.content.cloneNode(true);
+                const card = fragment.querySelector('.track-card');
+                const image = fragment.querySelector('img');
+                const play = () => playTrack(index);
+                image.src = track.image || '';
+                image.alt = `${trackTitle(track)} artwork`;
+                image.hidden = !track.image;
+                fragment.querySelector('h3').textContent = trackTitle(track);
+                fragment.querySelector('.artist').textContent = trackArtist(track);
+                fragment.querySelector('.album').textContent = track.album || 'Single';
+                fragment.querySelector('.artwork').addEventListener('click', play);
+                fragment.querySelector('.lyrics-button').addEventListener('click', () => openLyrics(track));
+                const download = fragment.querySelector('.download-button');
+                download.href = `/download?query=${encodeURIComponent(track.id || '')}&format=mp3`;
+                download.setAttribute('aria-label', `Download ${trackTitle(track)}`);
+                card.dataset.index = index;
+                results.append(fragment);
             });
-            return modal;
         }
 
-        function openLyricsModal(title, text){
-            const modal = ensureModal();
-            document.getElementById('lyricsTitle').textContent = title;
-            document.getElementById('lyricsContent').textContent = text;
-            modal.classList.add('open');
+        async function runSearch(query) {
+            const cleanQuery = query.trim();
+            if (!cleanQuery) return;
+            setNotice('');
+            $('#collection').hidden = true;
+            results.innerHTML = '';
+            state.tracks = [];
+            setLoading(true);
+            $('#resultsTitle').textContent = `Results for “${cleanQuery}”`;
+            try {
+                const response = await fetch(`/result/?query=${encodeURIComponent(cleanQuery)}`);
+                const data = await response.json();
+                if (!response.ok || data?.status === false) throw new Error(data?.error || 'Search failed');
+                renderTracks(data);
+            } catch (error) {
+                $('#emptyState').hidden = false;
+                setNotice(error.message || 'Could not load music right now. Please try again.');
+            } finally { setLoading(false); }
         }
 
-        function escapeHtml(unsafe) {
-            if (unsafe == null) return '';
-            return String(unsafe)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+        function playTrack(index) {
+            const track = state.tracks[index];
+            if (!track) return;
+            state.index = index;
+            $('.track-card.playing')?.classList.remove('playing');
+            document.querySelector(`.track-card[data-index="${index}"]`)?.classList.add('playing');
+            $('#player').hidden = false;
+            $('#playerTitle').textContent = trackTitle(track);
+            $('#playerArtist').textContent = trackArtist(track);
+            $('#playerCover').innerHTML = track.image ? `<img src="${escapeHtml(track.image)}" alt="">` : '<span>♫</span>';
+            audio.src = `/stream?query=${encodeURIComponent(track.id || '')}`;
+            audio.play().catch(() => setNotice('Playback needs a tap to begin. Press play in the player below.'));
         }
+
+        async function openLyrics(track) {
+            const dialog = $('#lyricsDialog');
+            $('#lyricsTitle').textContent = `${trackTitle(track)} · ${trackArtist(track)}`;
+            $('#lyricsBody').textContent = 'Loading lyrics…';
+            dialog.showModal();
+            try {
+                const response = await fetch(`/lyrics/?query=${encodeURIComponent(track.id || '')}`);
+                const data = await response.json();
+                $('#lyricsBody').textContent = data.lyrics || 'Lyrics are not available for this track.';
+            } catch { $('#lyricsBody').textContent = 'Lyrics could not be loaded right now.'; }
+        }
+
+        $('#searchForm').addEventListener('submit', (event) => { event.preventDefault(); runSearch(searchInput.value); });
+        $('#heroSearch').addEventListener('click', () => { searchInput.focus(); document.querySelector('#search').scrollIntoView({behavior: 'smooth'}); });
+        $('#demoSearch').addEventListener('click', () => { searchInput.value = 'Arijit Singh'; runSearch(searchInput.value); });
+        $('#closeLyrics').addEventListener('click', () => $('#lyricsDialog').close());
+        $('#playButton').addEventListener('click', () => audio.paused ? audio.play() : audio.pause());
+        $('#nextTrack').addEventListener('click', () => state.tracks.length && playTrack((state.index + 1) % state.tracks.length));
+        $('#previousTrack').addEventListener('click', () => state.tracks.length && playTrack((state.index - 1 + state.tracks.length) % state.tracks.length));
+        audio.addEventListener('play', () => { $('#playButton').textContent = 'Ⅱ'; $('#playButton').setAttribute('aria-label', 'Pause'); });
+        audio.addEventListener('pause', () => { $('#playButton').textContent = '▶'; $('#playButton').setAttribute('aria-label', 'Play'); });
+        audio.addEventListener('timeupdate', () => { $('#progress').value = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0; $('#currentTime').textContent = formatTime(audio.currentTime); });
+        audio.addEventListener('loadedmetadata', () => $('#duration').textContent = formatTime(audio.duration));
+        audio.addEventListener('ended', () => $('#nextTrack').click());
+        $('#progress').addEventListener('input', (event) => { if (audio.duration) audio.currentTime = audio.duration * (event.target.value / 100); });
+        $('#volume').addEventListener('input', (event) => { audio.volume = event.target.value; });
+
+        const root = document.documentElement;
+        const savedTheme = localStorage.getItem('kedarmusic-theme') || 'dark';
+        function setTheme(theme) { root.dataset.theme = theme; $('#themeLabel').textContent = theme === 'dark' ? 'Light mode' : 'Dark mode'; localStorage.setItem('kedarmusic-theme', theme); }
+        setTheme(savedTheme);
+        $('#themeToggle').addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
+        $('#menuToggle').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
     </script>
 </body>
 </html>
-
-
-
