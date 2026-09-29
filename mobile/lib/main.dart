@@ -7,7 +7,7 @@ import 'package:just_audio/just_audio.dart';
 
 const _apiBaseUrl = String.fromEnvironment(
   'LURA_API_BASE_URL',
-  defaultValue: 'http://10.0.2.2:5100',
+  defaultValue: 'https://lura-ten.vercel.app',
 );
 const _orange = Color(0xFFFF4D1C);
 
