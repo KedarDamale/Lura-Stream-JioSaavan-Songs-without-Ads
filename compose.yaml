@@ -1,0 +1,9 @@
+services:
+  lura:
+    build: .
+    ports:
+      - "5100:5100"
+    environment:
+      # Add your public web origin in production, comma-separated when needed.
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5100,http://127.0.0.1:5100}
+    restart: unless-stopped
