@@ -33,3 +33,11 @@ def test_get_lyrics_strips_html(mock_get_text) -> None:
     mock_get_text.return_value = '{"lyrics":"First line<br>Second <b>line</b>"}'
 
     assert client.get_lyrics("track-1") == "First line\nSecond line"
+
+
+def test_parse_json_preserves_invalid_provider_backslash_escape() -> None:
+    payload = r'{"songs":{"data":[{"id":"track-1","song":"Name \x sample"}]}}'
+
+    parsed = client._parse_json(payload)
+
+    assert parsed["songs"]["data"][0]["song"] == r"Name \x sample"

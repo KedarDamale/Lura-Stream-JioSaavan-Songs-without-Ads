@@ -1,6 +1,7 @@
 import base64
 import json
 import re
+from json import JSONDecodeError
 from typing import Any, Dict, List, Optional, Union
 
 import requests
@@ -15,13 +16,13 @@ def search_for_song(query: str, include_lyrics: bool, return_songdata: bool) -> 
         return get_song(song_id, include_lyrics)
 
     search_url = endpoints.search_base_url + query
-    response_text = _decode_unicode_escape(_http_get_text(search_url))
+    response_text = _http_get_text(search_url)
 
     # Fix JSON where double quotes appear inside (From "...")
     pattern = r'\(From "([^"]+)"\)'
     response_text = re.sub(pattern, r"(From '\\1')", response_text)
 
-    response_json = json.loads(response_text)
+    response_json = _parse_json(response_text)
     songs_data = response_json.get("songs", {}).get("data", [])
     if not return_songdata:
         return songs_data
@@ -40,8 +41,8 @@ def search_for_song(query: str, include_lyrics: bool, return_songdata: bool) -> 
 def get_song(song_id: str, include_lyrics: bool) -> Optional[Dict[str, Any]]:
     try:
         details_url = endpoints.song_details_base_url + song_id
-        response_text = _decode_unicode_escape(_http_get_text(details_url))
-        response_json = json.loads(response_text)
+        response_text = _http_get_text(details_url)
+        response_json = _parse_json(response_text)
         raw_song = response_json.get(song_id)
         if not raw_song:
             return None
@@ -72,8 +73,8 @@ def get_song_id(url: str) -> str:
 def get_album(album_id: str, include_lyrics: bool) -> Optional[Dict[str, Any]]:
     try:
         url = endpoints.album_details_base_url + album_id
-        response_text = _decode_unicode_escape(_http_get_text(url))
-        response_json = json.loads(response_text)
+        response_text = _http_get_text(url)
+        response_json = _parse_json(response_text)
         return _format_album(response_json, include_lyrics)
     except Exception:
         return None
@@ -90,8 +91,8 @@ def get_album_id(input_url: str) -> str:
 def get_playlist(list_id: str, include_lyrics: bool) -> Optional[Dict[str, Any]]:
     try:
         url = endpoints.playlist_details_base_url + list_id
-        response_text = _decode_unicode_escape(_http_get_text(url))
-        response_json = json.loads(response_text)
+        response_text = _http_get_text(url)
+        response_json = _parse_json(response_text)
         return _format_playlist(response_json, include_lyrics)
     except Exception:
         return None
@@ -110,7 +111,7 @@ def get_lyrics(lyrics_id_or_song_id: str) -> str:
     def _fetch(u: str) -> str:
         try:
             lyrics_json = _http_get_text(u)
-            lyrics_data = json.loads(lyrics_json)
+            lyrics_data = _parse_json(lyrics_json)
             raw = lyrics_data.get("lyrics", "")
             if not isinstance(raw, str):
                 return ""
@@ -236,10 +237,24 @@ def _http_get_text(url: str, data: Optional[List[tuple]] = None) -> str:
 
 
 def _decode_unicode_escape(text: str) -> str:
-    # Some endpoints return JSON with unicode-escaped characters
+    """Decode legacy escaped text without being used to transform JSON."""
     try:
-        return text.encode().decode("unicode-escape")
-    except Exception:
+        return text.encode("utf-8").decode("unicode-escape")
+    except UnicodeDecodeError:
         return text
+
+
+def _parse_json(text: str) -> Any:
+    """Parse provider JSON, escaping stray backslashes in text fields safely.
+
+    JioSaavn occasionally returns values containing sequences such as ``\\x``
+    that are not legal JSON escapes. Preserve those slashes as literal text,
+    while leaving valid JSON and unicode escapes untouched.
+    """
+    try:
+        return json.loads(text)
+    except JSONDecodeError:
+        repaired = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", text)
+        return json.loads(repaired)
 
 

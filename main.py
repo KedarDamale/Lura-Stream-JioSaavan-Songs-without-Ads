@@ -298,7 +298,11 @@ def result(query: str | None = Query(default=None), lyrics: bool = Query(default
         return _error("Query is required", 400)
     query = query.strip()
     if not query.startswith(("http://", "https://")):
-        return JSONResponse(content=jiosaavn.search_for_song(query, lyrics, True))
+        try:
+            return JSONResponse(content=jiosaavn.search_for_song(query, lyrics, True))
+        except (requests.RequestException, ValueError):
+            logger.warning("Catalog search failed", exc_info=True)
+            return _error("The music catalog could not be searched right now", 502)
     if not _is_jiosaavn_url(query):
         return _error("Only JioSaavn URLs are supported", 400)
     try:
