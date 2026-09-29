@@ -1,0 +1,43 @@
+name: Lura release artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release APK in Docker
+        run: >-
+          docker build --target artifact --output type=local,dest=release
+          --build-arg LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://example.com' }}
+          --file mobile/Dockerfile mobile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lura-android-release
+          path: release/lura.apk
+
+  ios-unsigned:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - name: Generate iOS wrapper and build unsigned app
+        working-directory: mobile
+        run: |
+          flutter create --org com.kedardamale --project-name lura --platforms=ios .
+          flutter pub get
+          flutter build ios --release --no-codesign --dart-define=LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://example.com' }}
+          ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app ../release/lura-ios-unsigned.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lura-ios-unsigned
+          path: release/lura-ios-unsigned.zip
