@@ -35,7 +35,8 @@ button { cursor: pointer; }
 .sidebar { position: fixed; z-index: 10; width: 250px; height: 100vh; padding: 30px 20px; background: color-mix(in srgb, var(--panel) 95%, transparent); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--soft); font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 20px; text-decoration: none; letter-spacing: -.7px; }
 .brand > span:last-child span { color: var(--orange-light); }
-.brand-mark { display: grid; place-items: center; width: 33px; height: 33px; border-radius: 11px; background: linear-gradient(145deg, var(--orange), #c72019); color: white; box-shadow: 0 6px 20px rgba(255, 77, 28, .3); }
+.brand-mark { display: grid; place-items: center; width: 33px; height: 33px; overflow: hidden; border-radius: 11px; background: linear-gradient(145deg, var(--orange), #c72019); color: white; box-shadow: 0 6px 20px rgba(255, 77, 28, .3); }
+.brand-mark img { width: 100%; height: 100%; }
 nav { display: grid; gap: 7px; margin-top: 60px; }
 .nav-item { padding: 11px 12px; border-radius: 10px; color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 600; transition: .2s ease; }
 .nav-item span { display: inline-block; width: 26px; font-size: 21px; vertical-align: -2px; }
