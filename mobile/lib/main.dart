@@ -73,6 +73,7 @@ class LuraHome extends StatefulWidget {
 
 class _LuraHomeState extends State<LuraHome> {
   final _searchController = TextEditingController();
+  final _searchFocus = FocusNode();
   final _audio = AudioPlayer();
   List<Track> _tracks = [];
   Track? _currentTrack;
@@ -82,6 +83,7 @@ class _LuraHomeState extends State<LuraHome> {
   @override
   void dispose() {
     _searchController.dispose();
+    _searchFocus.dispose();
     _audio.dispose();
     super.dispose();
   }
@@ -154,10 +156,11 @@ class _LuraHomeState extends State<LuraHome> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(18, 6, 18, 110),
             children: [
-              _Hero(onTap: () => _searchController.requestFocus()),
+              _Hero(onTap: _searchFocus.requestFocus),
               const SizedBox(height: 23),
               TextField(
                 controller: _searchController,
+                focusNode: _searchFocus,
                 textInputAction: TextInputAction.search,
                 onSubmitted: _search,
                 decoration: InputDecoration(
