@@ -1,27 +1,28 @@
 # Lura
 
-Lura is a self-hosted FastAPI music discovery service with an original Jinja web player and a Flutter Android client. Search for songs, albums, playlists, or JioSaavn links; stream tracks through Lura without server-side audio files; download a tagged MP3/M4A only when explicitly requested.
+Lura is a music discovery and streaming app with a FastAPI server, a server-rendered web player, and a Flutter Android client. Search JioSaavn songs, albums, and playlists, then stream them from the web or mobile app.
 
-## Highlights
+**Live app:** [https://lura-ten.vercel.app](https://lura-ten.vercel.app) · [API docs](https://lura-ten.vercel.app/docs) · [Health](https://lura-ten.vercel.app/health)
 
-- Original orange-red, responsive music interface with dark and light themes
-- Memory-only streaming proxy with HTTP range support for seeking
-- Song, album, playlist, lyrics, SRT subtitle, and tagged-download API routes
-- Mobile Flutter client that uses the same streaming API
-- Docker-only Android build: Flutter never needs to be installed locally
-- Pytest, Ruff, Docker, Android, and macOS iOS-archive checks in GitHub Actions
+## Features
 
-## Run the server
+- Responsive Jinja web app with orange-red styling and persistent light/dark themes
+- Song search and JioSaavn song, album, and playlist URL lookup
+- Lyrics display and subtitle export
+- In-memory audio streaming proxy with HTTP range forwarding for seeking
+- Optional tagged MP3/M4A download endpoint
+- Flutter mobile player using the same API and production server
+- Docker deployment and Docker-only Android builds
 
-The production-shaped option is Docker:
+## Run the server locally
 
 ```bash
 docker compose up --build
 ```
 
-Open [http://localhost:5100](http://localhost:5100). Interactive API documentation is at `/docs` and the liveness endpoint is `/health`.
+Open [http://localhost:5100](http://localhost:5100). The API docs are at `/docs`, and `/health` reports service health.
 
-For local Python development:
+For Python development:
 
 ```bash
 python3 -m venv .venv
@@ -30,37 +31,39 @@ pip install -e ".[dev]"
 uvicorn main:app --reload --port 5100
 ```
 
-Set `CORS_ALLOW_ORIGINS` to a comma-separated set of permitted frontend origins before exposing the server publicly. Use HTTPS in production.
+Set `CORS_ALLOW_ORIGINS` to comma-separated web origins if the mobile or web client is hosted separately. The deployed server currently serves the Jinja web app and API from the same origin.
 
-## Streaming behavior
+## Streaming and downloads
 
-`GET /stream?query=<song-id>` resolves a track and forwards its audio in 64 KiB chunks. It does not write audio to disk; only ordinary server/client networking buffers are used. The endpoint forwards a browser/mobile `Range` header so seeking works. `/download` is deliberately the separate endpoint that creates a temporary tagged file, then deletes it after the response.
+`GET /stream?query=<song-id>` relays audio to the player in chunks and forwards `Range` requests for seeking. Streaming does not save a track on the server. `GET /download` is a separate explicit download route that uses temporary storage while preparing a tagged file.
 
-## Build the Android app with Docker
+The Vercel deployment includes the search, web, streaming, lyrics, subtitle, and M4A paths. Vercel’s Python runtime does not include FFmpeg, so MP3 transcoding may be unavailable there; use the included Docker deployment (which installs FFmpeg) for reliable MP3 downloads.
 
-Set the public HTTPS address of your deployed server, then build the APK. The output is written to `release/lura.apk`.
+## Android build
+
+The Flutter SDK stays inside Docker. Build an APK with the production API URL embedded:
 
 ```bash
 docker build --target artifact --output type=local,dest=release \
-  --build-arg LURA_API_BASE_URL=https://music.example.com \
+  --build-arg LURA_API_BASE_URL=https://lura-ten.vercel.app \
   --file mobile/Dockerfile mobile
 ```
 
-For Android emulator development the default server is `http://10.0.2.2:5100`. A physical device needs a reachable LAN or public server URL; rebuild with `LURA_API_BASE_URL` set to that URL.
+The APK is written to `release/lura.apk`. `LURA_API_BASE_URL` can be changed for local development; Android emulators reach a host machine at `http://10.0.2.2:5100`.
 
-## iOS
+## iOS builds
 
-The release workflow produces an unsigned iOS app archive on a macOS GitHub runner. Installing on real iOS devices requires an Apple Developer signing certificate and provisioning profile; configure those as GitHub secrets before adapting the workflow to produce a signed IPA.
+GitHub Actions can create an unsigned iOS app archive on macOS. Installing on devices or distributing through the App Store requires Apple signing credentials and provisioning profiles.
 
-## Quality checks
+## Development checks
 
 ```bash
 ruff check .
 pytest --cov
 ```
 
-Every push to `main` runs API lint/tests, a production container build, and a Dockerized Android APK build. Tagging `v*` or manually dispatching **Lura release artifacts** uploads Android and iOS build outputs as GitHub Actions artifacts.
+GitHub Actions checks API lint/tests, builds the server container, and builds the Android APK. The release workflow builds Android and an unsigned iOS archive.
 
-## Responsible use
+## About
 
-Use Lura only for content you are permitted to access and download, and comply with the music provider’s terms and applicable copyright law.
+Lura is an independent project. It uses publicly accessible JioSaavn endpoints for catalog metadata and playback resolution. Use the app in accordance with provider terms and applicable rights.

@@ -218,7 +218,7 @@ def _stream_chunks(response: requests.Response) -> Iterator[bytes]:
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", {"app_name": "KedarMusic"})
+    return templates.TemplateResponse(request, "index.html", {"app_name": "Lura"})
 
 
 @app.get("/health", tags=["system"])
