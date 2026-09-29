@@ -19,9 +19,6 @@ htmlcov/
 .env.*
 !.env.example
 downloads/
-release/*.apk
-release/*.ipa
-release/*.zip
 
 # OS and editor files
 .DS_Store
