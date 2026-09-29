@@ -5,13 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Search, stream, and download music with KedarMusic.">
     <title>{{ app_name }} · Music without the clutter</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', path='lura-mark.svg') }}">
     <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}">
 </head>
 <body>
     <div class="app-shell">
         <aside class="sidebar" aria-label="Main navigation">
-            <a class="brand" href="/" aria-label="KedarMusic home">
-                <span class="brand-mark">K</span><span>Kedar<span>Music</span></span>
+            <a class="brand" href="/" aria-label="Lura home">
+                <span class="brand-mark"><img src="{{ url_for('static', path='lura-mark.svg') }}" alt=""></span><span>Lura</span>
             </a>
             <nav>
                 <a class="nav-item active" href="#discover"><span>⌂</span> Discover</a>
@@ -241,8 +242,8 @@
         $('#volume').addEventListener('input', (event) => { audio.volume = event.target.value; });
 
         const root = document.documentElement;
-        const savedTheme = localStorage.getItem('kedarmusic-theme') || 'dark';
-        function setTheme(theme) { root.dataset.theme = theme; $('#themeLabel').textContent = theme === 'dark' ? 'Light mode' : 'Dark mode'; localStorage.setItem('kedarmusic-theme', theme); }
+        const savedTheme = localStorage.getItem('lura-theme') || 'dark';
+        function setTheme(theme) { root.dataset.theme = theme; $('#themeLabel').textContent = theme === 'dark' ? 'Light mode' : 'Dark mode'; localStorage.setItem('lura-theme', theme); }
         setTheme(savedTheme);
         $('#themeToggle').addEventListener('click', () => setTheme(root.dataset.theme === 'dark' ? 'light' : 'dark'));
         $('#menuToggle').addEventListener('click', () => document.querySelector('.sidebar').classList.toggle('open'));
