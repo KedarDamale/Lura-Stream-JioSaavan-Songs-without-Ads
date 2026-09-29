@@ -16,7 +16,7 @@ jobs:
       - name: Build release APK in Docker
         run: >-
           docker build --target artifact --output type=local,dest=release
-          --build-arg LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://example.com' }}
+          --build-arg LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://lura-ten.vercel.app' }}
           --file mobile/Dockerfile mobile
       - uses: actions/upload-artifact@v4
         with:
@@ -35,7 +35,7 @@ jobs:
         run: |
           flutter create --org com.kedardamale --project-name lura --platforms=ios .
           flutter pub get
-          flutter build ios --release --no-codesign --dart-define=LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://example.com' }}
+          flutter build ios --release --no-codesign --dart-define=LURA_API_BASE_URL=${{ vars.LURA_API_BASE_URL || 'https://lura-ten.vercel.app' }}
           ditto -c -k --sequesterRsrc --keepParent build/ios/iphoneos/Runner.app ../release/lura-ios-unsigned.zip
       - uses: actions/upload-artifact@v4
         with:
